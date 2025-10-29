@@ -55,25 +55,30 @@ def formatar_data(data_xml):
     except Exception:
         return data_xml
 
-def verificar_cancelamento_intempestivo(caminho_recusado, nfe_str):
+def verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
     """Verifica se há arquivo na pasta recusado e se contém a mensagem de cancelamento intempestivo"""
     # Procurar por arquivos .txt com o número da nota
     padrao_arquivo = f"*{nfe_str}*.txt"
     
-    try:
-        for arquivo in Path(caminho_recusado).glob(padrao_arquivo):
-            try:
-                encoding = detectar_encoding(arquivo)
-                with open(arquivo, 'r', encoding=encoding) as f:
-                    conteudo = f.read()
-                
-                # Verificar se contém a mensagem específica
-                if "501 : Rejeição: Pedido de Cancelamento intempestivo" in conteudo:
-                    return True  # Tem cancelamento intempestivo, não deve eliminar
-            except Exception:
-                continue
-    except Exception:
-        pass
+    for caminho_recusado in caminhos_recusado:
+        try:
+            for arquivo in Path(caminho_recusado).glob(padrao_arquivo):
+                try:
+                    encoding = detectar_encoding(arquivo)
+                    with open(arquivo, 'r', encoding=encoding) as f:
+                        conteudo = f.read()
+                    
+                    # Verificar se contém a mensagem específica
+                    if "501 : Rejeição: Pedido de Cancelamento intempestivo" in conteudo:
+                        return True
+                    if "493 : Rejeição: Evento não atende o Schema XML específico" in conteudo:
+                        return True 
+                    if "221 : Rejeição: Confirmado o recebimento da NF-e pelo destinatário" in conteudo:
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
     
     return False  # Não encontrou ou não tem a mensagem específica
 
@@ -91,12 +96,28 @@ def buscar_xml_por_data():
         print("❌ Formato de data inválido!")
         return None
     
-    caminho_xml = r"S:\hor\nfe\enviado"
-    caminho_eventos = r"S:\hor\nfe\eventos"
-    caminho_recusado = r"S:\hor\nfe\recusado"
+    # Lista de caminhos para procurar XMLs
+    caminhos_xml = [
+        r"S:\hor\nfe\enviado",
+        r"S:\hor\nfe2\enviado"
+    ]
     
-    if not os.path.exists(caminho_xml):
-        print(f"❌ Diretório não encontrado: {caminho_xml}")
+    # Lista de caminhos para eventos
+    caminhos_eventos = [
+        r"S:\hor\nfe\eventos",
+        r"S:\hor\nfe2\eventos"
+    ]
+    
+    # Lista de caminhos para recusados
+    caminhos_recusado = [
+        r"S:\hor\nfe\recusado",
+        r"S:\hor\nfe2\recusado"
+    ]
+    
+    # Verificar se pelo menos um diretório existe
+    diretorios_existentes = [caminho for caminho in caminhos_xml if os.path.exists(caminho)]
+    if not diretorios_existentes:
+        print(f"❌ Nenhum diretório encontrado: {caminhos_xml}")
         return None
     
     print("⏳ Buscando arquivos XML...")
@@ -106,45 +127,75 @@ def buscar_xml_por_data():
     notas_venda = 0
     notas_mantidas_por_intempestivo = 0
     
-    arquivos_processar = []
-    with os.scandir(caminho_xml) as entries:
-        for entry in entries:
-            if entry.is_file() and entry.name.lower().endswith('.xml'):
-                try:
-                    data_modificacao = datetime.fromtimestamp(entry.stat().st_mtime)
-                    if data_inicial <= data_modificacao <= data_final:
-                        arquivos_processar.append(entry.name)
-                        arquivos_no_periodo += 1
-                except Exception:
-                    continue
+    # Coletar arquivos .can de todos os caminhos de eventos
+    arquivos_can = set()
+    for caminho_evento in caminhos_eventos:
+        if os.path.exists(caminho_evento):
+            try:
+                with os.scandir(caminho_evento) as entries:
+                    for entry in entries:
+                        if entry.is_file() and entry.name.lower().endswith('.can'):
+                            arquivos_can.add(entry.name.lower())
+                            print(f"📁 Arquivo .can encontrado: {entry.name}")
+            except Exception as e:
+                print(f"⚠️ Erro ao acessar eventos {caminho_evento}: {e}")
+                continue
+    
+    print(f"📄 Total de arquivos .can encontrados: {len(arquivos_can)}")
+    
+    # Processar arquivos XML de todos os caminhos - CORREÇÃO AQUI
+    arquivos_processar = []  # Lista única para todos os arquivos
+    
+    for caminho_xml in caminhos_xml:
+        if not os.path.exists(caminho_xml):
+            print(f"⚠️ Diretório não encontrado: {caminho_xml}")
+            continue
+            
+        print(f"📁 Procurando em: {caminho_xml}")
+        
+        try:
+            with os.scandir(caminho_xml) as entries:
+                for entry in entries:
+                    if entry.is_file() and entry.name.lower().endswith('.xml'):
+                        try:
+                            data_modificacao = datetime.fromtimestamp(entry.stat().st_mtime)
+                            if data_inicial <= data_modificacao <= data_final:
+                                arquivos_processar.append((caminho_xml, entry.name))
+                                arquivos_no_periodo += 1
+                        except Exception:
+                            continue
+        except Exception as e:
+            print(f"⚠️ Erro ao acessar {caminho_xml}: {e}")
+            continue
     
     if arquivos_no_periodo == 0:
         print("❌ Nenhum arquivo encontrado.")
         return None
     
-    arquivos_can = set()
-    if os.path.exists(caminho_eventos):
-        with os.scandir(caminho_eventos) as entries:
-            for entry in entries:
-                if entry.is_file() and entry.name.lower().endswith('.can'):
-                    arquivos_can.add(entry.name.lower())
+    print(f"📄 {arquivos_no_periodo} arquivos encontrados para processamento")
     
-    for arquivo in arquivos_processar:
+    # Processar todos os arquivos coletados
+    for caminho_xml, arquivo in arquivos_processar:
         caminho_completo = os.path.join(caminho_xml, arquivo)
         
         try:
-            with open(caminho_completo, 'r', encoding='utf-8') as file:
+            # Tentar diferentes encodings
+            encoding = detectar_encoding(caminho_completo)
+            with open(caminho_completo, 'r', encoding=encoding) as file:
                 conteudo = file.read()
             
+            # Verificar se é nota de venda
             if '<natOp>VENDA</natOp>' not in conteudo:
                 continue
             
             root = ET.fromstring(conteudo)
             
+            # Remover namespaces
             for elem in root.iter():
                 if '}' in elem.tag:
                     elem.tag = elem.tag.split('}', 1)[1]
             
+            # Buscar elementos necessários
             cnf_element = root.find('.//cNF')
             nnf_element = root.find('.//nNF')
             vnf_element = root.find('.//vNF')
@@ -157,11 +208,16 @@ def buscar_xml_por_data():
                 nfe_str = str(nfe_num).zfill(8)
                 nome_can = f"{nfe_str}.can"
                 
-                # Verificar se existe arquivo .can na pasta eventos
+                print(f"📋 Processando NF-e {nfe_num} do arquivo {arquivo}")
+                
+                # Verificar se existe arquivo .can em qualquer pasta de eventos
                 if nome_can.lower() in arquivos_can:
-                    # ANTES DE ELIMINAR: verificar se há cancelamento intempestivo na pasta recusado
-                    if os.path.exists(caminho_recusado):
-                        if verificar_cancelamento_intempestivo(caminho_recusado, nfe_str):
+                    print(f"⚠️  NF-e {nfe_num} tem arquivo .can, verificando cancelamento intempestivo...")
+                    
+                    # ANTES DE ELIMINAR: verificar se há cancelamento intempestivo nas pastas recusado
+                    if any(os.path.exists(caminho) for caminho in caminhos_recusado):
+                        if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
+                            print(f"✅ NF-e {nfe_num} mantida por cancelamento intempestivo")
                             # Mantém a nota no Excel (cancelamento intempestivo)
                             dados_nfe.append({
                                 'CF': 'VENDA',
@@ -174,10 +230,15 @@ def buscar_xml_por_data():
                             notas_venda += 1
                             notas_mantidas_por_intempestivo += 1
                             continue
+                        else:
+                            print(f"❌ NF-e {nfe_num} cancelada normalmente (sem intempestivo)")
+                    else:
+                        print(f"❌ NF-e {nfe_num} cancelada normalmente (sem pasta recusado)")
                     # Se não tem cancelamento intempestivo, elimina normalmente
                     continue
                 
                 # Nota não cancelada - adiciona normalmente
+                print(f"✅ NF-e {nfe_num} adicionada (não cancelada)")
                 dados_nfe.append({
                     'CF': 'VENDA',
                     'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
@@ -186,20 +247,30 @@ def buscar_xml_por_data():
                     'DATA': formatar_data(dh_emi_element.text)
                 })
                 notas_venda += 1
+            else:
+                print(f"⚠️  Arquivo {arquivo} não contém todos os campos necessários")
                 
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Erro ao processar {arquivo}: {e}")
             continue
     
     print(f"✅ {notas_venda} notas processadas")
     if notas_mantidas_por_intempestivo > 0:
         print(f"📋 {notas_mantidas_por_intempestivo} notas mantidas por cancelamento intempestivo")
-    return pd.DataFrame(dados_nfe) if dados_nfe else None
+    
+    # Ordenar por número da NF-e
+    if dados_nfe:
+        df_resultado = pd.DataFrame(dados_nfe)
+        df_resultado = df_resultado.sort_values('NF-E')
+        return df_resultado
+    else:
+        return None
 
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"C:\Users\win11\Downloads\fechamento-20250701-20250731.csv"
-    caminho_cancelados = r"C:\Users\win11\Downloads\canceladostodos.csv"
-    caminho_historico = r"C:\Users\win11\Downloads\20250701.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20251001-20251029.csv"
+    caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
+    caminho_historico = r"S:\hor\excel\20251001.csv"
     
     try:
         encoding_fechamento = detectar_encoding(caminho_fechamento)
