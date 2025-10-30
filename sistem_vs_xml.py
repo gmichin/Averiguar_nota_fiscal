@@ -61,6 +61,9 @@ def verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
     padrao_arquivo = f"*{nfe_str}*.txt"
     
     for caminho_recusado in caminhos_recusado:
+        if not os.path.exists(caminho_recusado):
+            continue
+            
         try:
             for arquivo in Path(caminho_recusado).glob(padrao_arquivo):
                 try:
@@ -126,6 +129,7 @@ def buscar_xml_por_data():
     arquivos_no_periodo = 0
     notas_venda = 0
     notas_mantidas_por_intempestivo = 0
+    notas_canceladas = 0
     
     # Coletar arquivos .can de todos os caminhos de eventos
     arquivos_can = set()
@@ -136,15 +140,14 @@ def buscar_xml_por_data():
                     for entry in entries:
                         if entry.is_file() and entry.name.lower().endswith('.can'):
                             arquivos_can.add(entry.name.lower())
-                            print(f"📁 Arquivo .can encontrado: {entry.name}")
             except Exception as e:
                 print(f"⚠️ Erro ao acessar eventos {caminho_evento}: {e}")
                 continue
     
     print(f"📄 Total de arquivos .can encontrados: {len(arquivos_can)}")
     
-    # Processar arquivos XML de todos os caminhos - CORREÇÃO AQUI
-    arquivos_processar = []  # Lista única para todos os arquivos
+    # Processar arquivos XML de todos os caminhos
+    arquivos_processar = []
     
     for caminho_xml in caminhos_xml:
         if not os.path.exists(caminho_xml):
@@ -172,7 +175,7 @@ def buscar_xml_por_data():
         print("❌ Nenhum arquivo encontrado.")
         return None
     
-    print(f"📄 {arquivos_no_periodo} arquivos encontrados para processamento")
+    print(f"📄 {arquivos_no_periodo} arquivos XML encontrados para processamento")
     
     # Processar todos os arquivos coletados
     for caminho_xml, arquivo in arquivos_processar:
@@ -208,45 +211,35 @@ def buscar_xml_por_data():
                 nfe_str = str(nfe_num).zfill(8)
                 nome_can = f"{nfe_str}.can"
                 
-                print(f"📋 Processando NF-e {nfe_num} do arquivo {arquivo}")
-                
                 # Verificar se existe arquivo .can em qualquer pasta de eventos
                 if nome_can.lower() in arquivos_can:
-                    print(f"⚠️  NF-e {nfe_num} tem arquivo .can, verificando cancelamento intempestivo...")
                     
-                    # ANTES DE ELIMINAR: verificar se há cancelamento intempestivo nas pastas recusado
-                    if any(os.path.exists(caminho) for caminho in caminhos_recusado):
-                        if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
-                            print(f"✅ NF-e {nfe_num} mantida por cancelamento intempestivo")
-                            # Mantém a nota no Excel (cancelamento intempestivo)
-                            dados_nfe.append({
-                                'CF': 'VENDA',
-                                'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
-                                'NF-E': nfe_num,
-                                'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
-                                'DATA': formatar_data(dh_emi_element.text),
-                                'OBS': 'Cancelamento Intempestivo'
-                            })
-                            notas_venda += 1
-                            notas_mantidas_por_intempestivo += 1
-                            continue
-                        else:
-                            print(f"❌ NF-e {nfe_num} cancelada normalmente (sem intempestivo)")
+                    # Verificar se há cancelamento intempestivo nas pastas recusado
+                    if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
+                        # Mantém a nota no Excel (cancelamento intempestivo)
+                        dados_nfe.append({
+                            'CF': 'VENDA',
+                            'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
+                            'NF-E': nfe_num,
+                            'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
+                            'DATA': formatar_data(dh_emi_element.text),
+                            'OBS': 'Cancelamento Intempestivo'
+                        })
+                        notas_venda += 1
+                        notas_mantidas_por_intempestivo += 1
                     else:
-                        print(f"❌ NF-e {nfe_num} cancelada normalmente (sem pasta recusado)")
-                    # Se não tem cancelamento intempestivo, elimina normalmente
-                    continue
-                
-                # Nota não cancelada - adiciona normalmente
-                print(f"✅ NF-e {nfe_num} adicionada (não cancelada)")
-                dados_nfe.append({
-                    'CF': 'VENDA',
-                    'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
-                    'NF-E': nfe_num,
-                    'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
-                    'DATA': formatar_data(dh_emi_element.text)
-                })
-                notas_venda += 1
+                        # Nota cancelada normalmente - NÃO adiciona à lista
+                        notas_canceladas += 1
+                else:
+                    # Nota não cancelada - adiciona normalmente
+                    dados_nfe.append({
+                        'CF': 'VENDA',
+                        'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
+                        'NF-E': nfe_num,
+                        'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
+                        'DATA': formatar_data(dh_emi_element.text)
+                    })
+                    notas_venda += 1
             else:
                 print(f"⚠️  Arquivo {arquivo} não contém todos os campos necessários")
                 
@@ -254,7 +247,9 @@ def buscar_xml_por_data():
             print(f"⚠️ Erro ao processar {arquivo}: {e}")
             continue
     
-    print(f"✅ {notas_venda} notas processadas")
+    print(f"\n📊 RESUMO DO PROCESSAMENTO:")
+    print(f"✅ {notas_venda} notas processadas e incluídas")
+    print(f"❌ {notas_canceladas} notas canceladas removidas")
     if notas_mantidas_por_intempestivo > 0:
         print(f"📋 {notas_mantidas_por_intempestivo} notas mantidas por cancelamento intempestivo")
     
@@ -266,9 +261,10 @@ def buscar_xml_por_data():
     else:
         return None
 
+# O restante do código permanece igual...
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20251001-20251029.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20251001-20251030.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
     caminho_historico = r"S:\hor\excel\20251001.csv"
     
