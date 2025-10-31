@@ -99,10 +99,10 @@ def buscar_xml_por_data():
         print("❌ Formato de data inválido!")
         return None
     
-    # Lista de caminhos para procurar XMLs
+    # Lista de caminhos para procurar XMLs (incluindo diretórios raiz)
     caminhos_xml = [
-        r"S:\hor\nfe\enviado",
-        r"S:\hor\nfe2\enviado"
+        r"S:\hor\nfe",  # Diretório raiz nfe
+        r"S:\hor\nfe2"  # Diretório raiz nfe2
     ]
     
     # Lista de caminhos para eventos
@@ -124,6 +124,7 @@ def buscar_xml_por_data():
         return None
     
     print("⏳ Buscando arquivos XML...")
+    print(f"📁 Diretórios de busca: {diretorios_existentes}")
     
     dados_nfe = []
     arquivos_no_periodo = 0
@@ -264,7 +265,7 @@ def buscar_xml_por_data():
 # O restante do código permanece igual...
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20251001-20251030.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20251001-20251031.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
     caminho_historico = r"S:\hor\excel\20251001.csv"
     
