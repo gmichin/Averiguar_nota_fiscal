@@ -1,6 +1,6 @@
 import os
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 from pathlib import Path
 import chardet
@@ -55,9 +55,47 @@ def formatar_data(data_xml):
     except Exception:
         return data_xml
 
+def extrair_data_rapido_xml(caminho_arquivo):
+    """Extrai a data de emissão do XML de forma RÁPIDA (apenas leitura parcial)"""
+    try:
+        # Ler apenas os primeiros 5000 bytes onde geralmente está a data
+        with open(caminho_arquivo, 'rb') as f:
+            conteudo_bytes = f.read(5000)
+        
+        # Detectar encoding
+        resultado = chardet.detect(conteudo_bytes)
+        encoding = resultado['encoding']
+        
+        # Converter para string
+        conteudo = conteudo_bytes.decode(encoding, errors='ignore')
+        
+        # Buscar padrão de data no XML (dhEmi)
+        if 'dhEmi' in conteudo:
+            # Encontrar a tag dhEmi
+            start_idx = conteudo.find('<dhEmi>')
+            if start_idx != -1:
+                start_idx += 7  # Tamanho de '<dhEmi>'
+                end_idx = conteudo.find('</dhEmi>', start_idx)
+                if end_idx != -1:
+                    data_str = conteudo[start_idx:end_idx]
+                    
+                    # Limpar timezone
+                    data_str = data_str.split('-03:00')[0] if '-03:00' in data_str else data_str.split('-04:00')[0] if '-04:00' in data_str else data_str
+                    
+                    if 'T' in data_str:
+                        data_dt = datetime.strptime(data_str, '%Y-%m-%dT%H:%M:%S')
+                    else:
+                        data_dt = datetime.strptime(data_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    return data_dt.date()
+        
+        return None
+        
+    except Exception:
+        return None
+
 def verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
     """Verifica se há arquivo na pasta recusado e se contém a mensagem de cancelamento intempestivo"""
-    # Procurar por arquivos .txt com o número da nota
     padrao_arquivo = f"*{nfe_str}*.txt"
     
     for caminho_recusado in caminhos_recusado:
@@ -72,189 +110,193 @@ def verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
                         conteudo = f.read()
                     
                     # Verificar se contém a mensagem específica
-                    if "501 : Rejeição: Pedido de Cancelamento intempestivo" in conteudo:
-                        return True
-                    if "493 : Rejeição: Evento não atende o Schema XML específico" in conteudo:
-                        return True 
-                    if "221 : Rejeição: Confirmado o recebimento da NF-e pelo destinatário" in conteudo:
+                    if any(msg in conteudo for msg in [
+                        "501 : Rejeição: Pedido de Cancelamento intempestivo",
+                        "493 : Rejeição: Evento não atende o Schema XML específico", 
+                        "221 : Rejeição: Confirmado o recebimento da NF-e pelo destinatário"
+                    ]):
                         return True
                 except Exception:
                     continue
         except Exception:
             continue
     
-    return False  # Não encontrou ou não tem a mensagem específica
+    return False
+
+def carregar_arquivos_can_rapido(caminhos_eventos):
+    """Carrega lista de arquivos .can de forma rápida"""
+    arquivos_can = set()
+    for caminho_evento in caminhos_eventos:
+        if os.path.exists(caminho_evento):
+            try:
+                # Listar arquivos .can uma única vez
+                for arquivo in os.listdir(caminho_evento):
+                    if arquivo.lower().endswith('.can'):
+                        arquivos_can.add(arquivo.lower())
+            except Exception as e:
+                print(f"⚠️ Erro ao acessar eventos {caminho_evento}: {e}")
+    return arquivos_can
+
+def processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado):
+    """Processa um arquivo XML completo e retorna os dados"""
+    try:
+        encoding = detectar_encoding(caminho_completo)
+        with open(caminho_completo, 'r', encoding=encoding) as file:
+            conteudo = file.read()
+        
+        # Verificar se é nota de venda RAPIDAMENTE
+        if '<natOp>VENDA</natOp>' not in conteudo:
+            return None
+        
+        root = ET.fromstring(conteudo)
+        
+        # Remover namespaces
+        for elem in root.iter():
+            if '}' in elem.tag:
+                elem.tag = elem.tag.split('}', 1)[1]
+        
+        # Buscar elementos necessários
+        cnf_element = root.find('.//cNF')
+        nnf_element = root.find('.//nNF')
+        vnf_element = root.find('.//vNF')
+        dh_emi_element = root.find('.//dhEmi')
+        
+        if all([cnf_element is not None, nnf_element is not None, 
+               vnf_element is not None, dh_emi_element is not None]):
+            
+            nfe_num = int(nnf_element.text) if nnf_element.text else 0
+            nfe_str = str(nfe_num).zfill(8)
+            nome_can = f"{nfe_str}.can"
+            
+            # Verificar se existe arquivo .can
+            if nome_can.lower() in arquivos_can:
+                # Verificar se há cancelamento intempestivo
+                if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
+                    return {
+                        'CF': 'VENDA',
+                        'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
+                        'NF-E': nfe_num,
+                        'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
+                        'DATA': formatar_data(dh_emi_element.text),
+                        'OBS': 'Cancelamento Intempestivo'
+                    }
+                else:
+                    return None  # Nota cancelada normalmente
+            else:
+                # Nota não cancelada
+                return {
+                    'CF': 'VENDA',
+                    'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
+                    'NF-E': nfe_num,
+                    'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
+                    'DATA': formatar_data(dh_emi_element.text)
+                }
+    
+    except Exception as e:
+        print(f"⚠️ Erro ao processar {os.path.basename(caminho_completo)}: {e}")
+    
+    return None
 
 def buscar_xml_por_data():
-    """Processa XMLs de notas fiscais por período"""
+    """Processa XMLs de notas fiscais por período - VERSÃO OTIMIZADA"""
     print("=== PROCESSADOR DE NOTAS FISCAIS ===")
     data_inicial_str = input("Digite a data inicial (DD/MM/AAAA): ")
     data_final_str = input("Digite a data final (DD/MM/AAAA): ")
     
     try:
-        data_inicial = datetime.strptime(data_inicial_str, "%d/%m/%Y")
-        data_final = datetime.strptime(data_final_str, "%d/%m/%Y")
-        data_final = data_final.replace(hour=23, minute=59, second=59)
+        data_inicial = datetime.strptime(data_inicial_str, "%d/%m/%Y").date()
+        data_final = datetime.strptime(data_final_str, "%d/%m/%Y").date()
+        
+        # INCLUIR TODOS OS DIAS ENTRE AS DATAS
+        dias_periodo = (data_final - data_inicial).days + 1
+        print(f"📅 Período: {data_inicial_str} a {data_final_str} ({dias_periodo} dias)")
+        
     except ValueError:
         print("❌ Formato de data inválido!")
         return None
     
-    # Lista de caminhos para procurar XMLs (incluindo diretórios raiz)
+    # Lista de caminhos
     caminhos_xml = [
-        r"S:\hor\nfe",  # Diretório raiz nfe
-        r"S:\hor\nfe2"  # Diretório raiz nfe2
+        r"S:\hor\nfe",
+        r"S:\hor\nfe2"
     ]
     
-    # Lista de caminhos para eventos
     caminhos_eventos = [
         r"S:\hor\nfe\eventos",
         r"S:\hor\nfe2\eventos"
     ]
     
-    # Lista de caminhos para recusados
     caminhos_recusado = [
         r"S:\hor\nfe\recusado",
         r"S:\hor\nfe2\recusado"
     ]
     
-    # Verificar se pelo menos um diretório existe
-    diretorios_existentes = [caminho for caminho in caminhos_xml if os.path.exists(caminho)]
+    # Verificar diretórios
+    diretorios_existentes = [c for c in caminhos_xml if os.path.exists(c)]
     if not diretorios_existentes:
-        print(f"❌ Nenhum diretório encontrado: {caminhos_xml}")
+        print("❌ Nenhum diretório encontrado!")
         return None
     
-    print("⏳ Buscando arquivos XML...")
-    print(f"📁 Diretórios de busca: {diretorios_existentes}")
+    print("⏳ Carregando arquivos .can...")
+    arquivos_can = carregar_arquivos_can_rapido(caminhos_eventos)
+    print(f"📄 {len(arquivos_can)} arquivos .can carregados")
+    
+    print("⏳ Buscando arquivos XML no período...")
     
     dados_nfe = []
+    total_arquivos = 0
     arquivos_no_periodo = 0
-    notas_venda = 0
-    notas_mantidas_por_intempestivo = 0
-    notas_canceladas = 0
+    notas_processadas = 0
     
-    # Coletar arquivos .can de todos os caminhos de eventos
-    arquivos_can = set()
-    for caminho_evento in caminhos_eventos:
-        if os.path.exists(caminho_evento):
-            try:
-                with os.scandir(caminho_evento) as entries:
-                    for entry in entries:
-                        if entry.is_file() and entry.name.lower().endswith('.can'):
-                            arquivos_can.add(entry.name.lower())
-            except Exception as e:
-                print(f"⚠️ Erro ao acessar eventos {caminho_evento}: {e}")
-                continue
+    # PRIMEIRO: Buscar RAPIDAMENTE arquivos no período
+    arquivos_para_processar = []
     
-    print(f"📄 Total de arquivos .can encontrados: {len(arquivos_can)}")
-    
-    # Processar arquivos XML de todos os caminhos
-    arquivos_processar = []
-    
-    for caminho_xml in caminhos_xml:
-        if not os.path.exists(caminho_xml):
-            print(f"⚠️ Diretório não encontrado: {caminho_xml}")
-            continue
-            
-        print(f"📁 Procurando em: {caminho_xml}")
+    for caminho_xml in diretorios_existentes:
+        print(f"🔍 Escaneando {caminho_xml}...")
         
         try:
+            # Listar arquivos uma única vez
             with os.scandir(caminho_xml) as entries:
-                for entry in entries:
-                    if entry.is_file() and entry.name.lower().endswith('.xml'):
-                        try:
-                            data_modificacao = datetime.fromtimestamp(entry.stat().st_mtime)
-                            if data_inicial <= data_modificacao <= data_final:
-                                arquivos_processar.append((caminho_xml, entry.name))
-                                arquivos_no_periodo += 1
-                        except Exception:
-                            continue
+                arquivos_lista = [entry for entry in entries if entry.is_file() and entry.name.lower().endswith('.xml')]
+            
+            total_arquivos += len(arquivos_lista)
+            
+            # Verificar data de cada arquivo (RÁPIDO)
+            for entry in arquivos_lista:
+                caminho_completo = os.path.join(caminho_xml, entry.name)
+                data_emissao = extrair_data_rapido_xml(caminho_completo)
+                
+                if data_emissao and data_inicial <= data_emissao <= data_final:
+                    arquivos_para_processar.append(caminho_completo)
+                    arquivos_no_periodo += 1
+                    
         except Exception as e:
-            print(f"⚠️ Erro ao acessar {caminho_xml}: {e}")
-            continue
+            print(f"⚠️ Erro em {caminho_xml}: {e}")
+    
+    print(f"📊 Total de arquivos XML: {total_arquivos}")
+    print(f"📅 Arquivos no período: {arquivos_no_periodo}")
     
     if arquivos_no_periodo == 0:
-        print("❌ Nenhum arquivo encontrado.")
+        print("❌ Nenhum arquivo no período especificado.")
         return None
     
-    print(f"📄 {arquivos_no_periodo} arquivos XML encontrados para processamento")
+    # SEGUNDO: Processar APENAS os arquivos do período
+    print("⏳ Processando arquivos...")
     
-    # Processar todos os arquivos coletados
-    for caminho_xml, arquivo in arquivos_processar:
-        caminho_completo = os.path.join(caminho_xml, arquivo)
+    for i, caminho_completo in enumerate(arquivos_para_processar, 1):
+        if i % 50 == 0:  # Progresso a cada 50 arquivos
+            print(f"📦 Processados {i}/{arquivos_no_periodo} arquivos...")
         
-        try:
-            # Tentar diferentes encodings
-            encoding = detectar_encoding(caminho_completo)
-            with open(caminho_completo, 'r', encoding=encoding) as file:
-                conteudo = file.read()
-            
-            # Verificar se é nota de venda
-            if '<natOp>VENDA</natOp>' not in conteudo:
-                continue
-            
-            root = ET.fromstring(conteudo)
-            
-            # Remover namespaces
-            for elem in root.iter():
-                if '}' in elem.tag:
-                    elem.tag = elem.tag.split('}', 1)[1]
-            
-            # Buscar elementos necessários
-            cnf_element = root.find('.//cNF')
-            nnf_element = root.find('.//nNF')
-            vnf_element = root.find('.//vNF')
-            dh_emi_element = root.find('.//dhEmi')
-            
-            if all([cnf_element is not None, nnf_element is not None, 
-                   vnf_element is not None, dh_emi_element is not None]):
-                
-                nfe_num = int(nnf_element.text) if nnf_element.text else 0
-                nfe_str = str(nfe_num).zfill(8)
-                nome_can = f"{nfe_str}.can"
-                
-                # Verificar se existe arquivo .can em qualquer pasta de eventos
-                if nome_can.lower() in arquivos_can:
-                    
-                    # Verificar se há cancelamento intempestivo nas pastas recusado
-                    if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
-                        # Mantém a nota no Excel (cancelamento intempestivo)
-                        dados_nfe.append({
-                            'CF': 'VENDA',
-                            'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
-                            'NF-E': nfe_num,
-                            'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
-                            'DATA': formatar_data(dh_emi_element.text),
-                            'OBS': 'Cancelamento Intempestivo'
-                        })
-                        notas_venda += 1
-                        notas_mantidas_por_intempestivo += 1
-                    else:
-                        # Nota cancelada normalmente - NÃO adiciona à lista
-                        notas_canceladas += 1
-                else:
-                    # Nota não cancelada - adiciona normalmente
-                    dados_nfe.append({
-                        'CF': 'VENDA',
-                        'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
-                        'NF-E': nfe_num,
-                        'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
-                        'DATA': formatar_data(dh_emi_element.text)
-                    })
-                    notas_venda += 1
-            else:
-                print(f"⚠️  Arquivo {arquivo} não contém todos os campos necessários")
-                
-        except Exception as e:
-            print(f"⚠️ Erro ao processar {arquivo}: {e}")
-            continue
+        dados = processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado)
+        if dados:
+            dados_nfe.append(dados)
+            notas_processadas += 1
     
-    print(f"\n📊 RESUMO DO PROCESSAMENTO:")
-    print(f"✅ {notas_venda} notas processadas e incluídas")
-    print(f"❌ {notas_canceladas} notas canceladas removidas")
-    if notas_mantidas_por_intempestivo > 0:
-        print(f"📋 {notas_mantidas_por_intempestivo} notas mantidas por cancelamento intempestivo")
+    print(f"\n📊 RESUMO FINAL:")
+    print(f"📄 Arquivos no período: {arquivos_no_periodo}")
+    print(f"✅ Notas processadas: {notas_processadas}")
+    print(f"💰 Valor total: R$ {sum(d['Valor XML'] for d in dados_nfe):,.2f}")
     
-    # Ordenar por número da NF-e
     if dados_nfe:
         df_resultado = pd.DataFrame(dados_nfe)
         df_resultado = df_resultado.sort_values('NF-E')
@@ -262,12 +304,13 @@ def buscar_xml_por_data():
     else:
         return None
 
-# O restante do código permanece igual...
+# ... (as outras funções processar_faturamento_bruto e criar_tabela_excel_com_formatacao permanecem IGUAIS) ...
+
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20251001-20251031.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20251102-20251104.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
-    caminho_historico = r"S:\hor\excel\20251001.csv"
+    caminho_historico = r"S:\hor\excel\20251102.csv"
     
     try:
         encoding_fechamento = detectar_encoding(caminho_fechamento)
