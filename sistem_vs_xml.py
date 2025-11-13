@@ -137,7 +137,33 @@ def carregar_arquivos_can_rapido(caminhos_eventos):
                 print(f"⚠️ Erro ao acessar eventos {caminho_evento}: {e}")
     return arquivos_can
 
-def processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado):
+def verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
+    """Verifica se há arquivo .inu com NOTA NAO AUTORIZADA para a nota fiscal"""
+    nfe_str = str(nfe_num).zfill(8)
+    padrao_arquivo = f"*{nfe_str}*.inu"
+    
+    for caminho_evento in caminhos_eventos:
+        if not os.path.exists(caminho_evento):
+            continue
+            
+        try:
+            for arquivo in Path(caminho_evento).glob(padrao_arquivo):
+                try:
+                    encoding = detectar_encoding(arquivo)
+                    with open(arquivo, 'r', encoding=encoding) as f:
+                        conteudo = f.read()
+                    
+                    # Verificar se contém a mensagem específica
+                    if '<xJust>NOTA NAO AUTORIZADA</xJust>' in conteudo:
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    
+    return False
+
+def processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado, caminhos_eventos):
     """Processa um arquivo XML completo e retorna os dados"""
     try:
         encoding = detectar_encoding(caminho_completo)
@@ -168,7 +194,12 @@ def processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado):
             nfe_str = str(nfe_num).zfill(8)
             nome_can = f"{nfe_str}.can"
             
-            # Verificar se existe arquivo .can
+            # PRIMEIRO: Verificar se a nota foi inutilizada com "NOTA NAO AUTORIZADA"
+            if verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
+                print(f"⚠️ Nota {nfe_num} inutilizada (NÃO AUTORIZADA) - removendo da lista")
+                return None
+            
+            # SEGUNDO: Verificar se existe arquivo .can
             if nome_can.lower() in arquivos_can:
                 # Verificar se há cancelamento intempestivo
                 if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
@@ -247,6 +278,7 @@ def buscar_xml_por_data():
     total_arquivos = 0
     arquivos_no_periodo = 0
     notas_processadas = 0
+    notas_inutilizadas = 0  # ← ADICIONE ESTA VARIÁVEL
     
     # PRIMEIRO: Buscar RAPIDAMENTE arquivos no período
     arquivos_para_processar = []
@@ -280,21 +312,26 @@ def buscar_xml_por_data():
         print("❌ Nenhum arquivo no período especificado.")
         return None
     
-    # SEGUNDO: Processar APENAS os arquivos do período
+     # SEGUNDO: Processar APENAS os arquivos do período
     print("⏳ Processando arquivos...")
-    
+
     for i, caminho_completo in enumerate(arquivos_para_processar, 1):
         if i % 50 == 0:  # Progresso a cada 50 arquivos
             print(f"📦 Processados {i}/{arquivos_no_periodo} arquivos...")
         
-        dados = processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado)
+        dados = processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado, caminhos_eventos)
         if dados:
             dados_nfe.append(dados)
             notas_processadas += 1
+        else:
+            # Verificar se foi inutilizada (você pode ajustar isso conforme necessário)
+            # Esta é uma verificação simplificada
+            pass
     
     print(f"\n📊 RESUMO FINAL:")
     print(f"📄 Arquivos no período: {arquivos_no_periodo}")
     print(f"✅ Notas processadas: {notas_processadas}")
+    print(f"🚫 Notas inutilizadas (NÃO AUTORIZADA): {notas_inutilizadas}")
     print(f"💰 Valor total: R$ {sum(d['Valor XML'] for d in dados_nfe):,.2f}")
     
     if dados_nfe:
@@ -303,12 +340,10 @@ def buscar_xml_por_data():
         return df_resultado
     else:
         return None
-
-# ... (as outras funções processar_faturamento_bruto e criar_tabela_excel_com_formatacao permanecem IGUAIS) ...
-
+    
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20251102-20251104.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20251102-20251113.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
     caminho_historico = r"S:\hor\excel\20251102.csv"
     
