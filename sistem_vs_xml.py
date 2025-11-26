@@ -113,7 +113,8 @@ def verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
                     if any(msg in conteudo for msg in [
                         "501 : Rejeição: Pedido de Cancelamento intempestivo",
                         "493 : Rejeição: Evento não atende o Schema XML específico", 
-                        "221 : Rejeição: Confirmado o recebimento da NF-e pelo destinatário"
+                        "221 : Rejeição: Confirmado o recebimento da NF-e pelo destinatário",
+                        "241 : Rejeição: Um número da faixa já foi utilizado"
                     ]):
                         return True
                 except Exception:
@@ -155,6 +156,12 @@ def verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
                     
                     # Verificar se contém a mensagem específica
                     if '<xJust>NOTA NAO AUTORIZADA</xJust>' in conteudo:
+                        return True
+                    if '<xJust>NOTA NAO APARECE NO SEFAZ</xJust>' in conteudo:
+                        return True
+                    if '<xServ>INUTILIZAR</xServ>' in conteudo:
+                        return True
+                    if '<xJust>ERRO NO SEFAZ................</xJust>' in conteudo:
                         return True
                 except Exception:
                     continue
@@ -246,10 +253,12 @@ def buscar_xml_por_data():
         print("❌ Formato de data inválido!")
         return None
     
-    # Lista de caminhos
+    # Lista de caminhos - INCLUINDO PASTAS ENVIADO
     caminhos_xml = [
         r"S:\hor\nfe",
-        r"S:\hor\nfe2"
+        r"S:\hor\nfe2",
+        r"S:\hor\nfe\enviado",  # NOVO
+        r"S:\hor\nfe2\enviado"  # NOVO
     ]
     
     caminhos_eventos = [
@@ -278,10 +287,11 @@ def buscar_xml_por_data():
     total_arquivos = 0
     arquivos_no_periodo = 0
     notas_processadas = 0
-    notas_inutilizadas = 0  # ← ADICIONE ESTA VARIÁVEL
+    notas_inutilizadas = 0
     
     # PRIMEIRO: Buscar RAPIDAMENTE arquivos no período
     arquivos_para_processar = []
+    arquivos_unicos = set()  # CONJUNTO PARA EVITAR DUPLICATAS
     
     for caminho_xml in diretorios_existentes:
         print(f"🔍 Escaneando {caminho_xml}...")
@@ -295,24 +305,29 @@ def buscar_xml_por_data():
             
             # Verificar data de cada arquivo (RÁPIDO)
             for entry in arquivos_lista:
+                # VERIFICAR SE JÁ PROCESSAMOS ESTE ARQUIVO (PELO NOME)
+                if entry.name in arquivos_unicos:
+                    continue  # PULAR ARQUIVO DUPLICADO
+                
                 caminho_completo = os.path.join(caminho_xml, entry.name)
                 data_emissao = extrair_data_rapido_xml(caminho_completo)
                 
                 if data_emissao and data_inicial <= data_emissao <= data_final:
                     arquivos_para_processar.append(caminho_completo)
+                    arquivos_unicos.add(entry.name)  # ADICIONAR AO CONJUNTO
                     arquivos_no_periodo += 1
                     
         except Exception as e:
             print(f"⚠️ Erro em {caminho_xml}: {e}")
     
-    print(f"📊 Total de arquivos XML: {total_arquivos}")
-    print(f"📅 Arquivos no período: {arquivos_no_periodo}")
+    print(f"📊 Total de arquivos XML encontrados: {total_arquivos}")
+    print(f"📅 Arquivos únicos no período: {arquivos_no_periodo}")
     
     if arquivos_no_periodo == 0:
         print("❌ Nenhum arquivo no período especificado.")
         return None
     
-     # SEGUNDO: Processar APENAS os arquivos do período
+    # SEGUNDO: Processar APENAS os arquivos do período
     print("⏳ Processando arquivos...")
 
     for i, caminho_completo in enumerate(arquivos_para_processar, 1):
@@ -323,13 +338,9 @@ def buscar_xml_por_data():
         if dados:
             dados_nfe.append(dados)
             notas_processadas += 1
-        else:
-            # Verificar se foi inutilizada (você pode ajustar isso conforme necessário)
-            # Esta é uma verificação simplificada
-            pass
     
     print(f"\n📊 RESUMO FINAL:")
-    print(f"📄 Arquivos no período: {arquivos_no_periodo}")
+    print(f"📄 Arquivos únicos no período: {arquivos_no_periodo}")
     print(f"✅ Notas processadas: {notas_processadas}")
     print(f"🚫 Notas inutilizadas (NÃO AUTORIZADA): {notas_inutilizadas}")
     print(f"💰 Valor total: R$ {sum(d['Valor XML'] for d in dados_nfe):,.2f}")
@@ -343,7 +354,7 @@ def buscar_xml_por_data():
     
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20251102-20251113.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20251102-20251126.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
     caminho_historico = r"S:\hor\excel\20251102.csv"
     
