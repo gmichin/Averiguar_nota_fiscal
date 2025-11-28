@@ -165,6 +165,8 @@ def verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
                         return True
                     if '<xJust>MERCADO NAO QUIS RECEBER</xJust>' in conteudo:
                         return True
+                    if '<xJust>MERCADORIA FOI DUAS VEZES NO DIA</xJust>' in conteudo:
+                        return True
                 except Exception:
                     continue
         except Exception:
