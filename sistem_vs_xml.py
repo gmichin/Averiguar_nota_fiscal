@@ -183,6 +183,8 @@ def verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
                         return True
                     if '<xJust>FORA DE HORARIO....</xJust>' in conteudo:
                         return True
+                    if '<xJust>NAO APARECEU NO SEFAZ</xJust>' in conteudo:
+                        return True
                 except Exception:
                     continue
         except Exception:
@@ -374,9 +376,9 @@ def buscar_xml_por_data():
     
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20251201-20251215.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20260101-20260106.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
-    caminho_historico = r"S:\hor\excel\20251201.csv"
+    caminho_historico = r"S:\hor\excel\20260101.csv"
     
     try:
         encoding_fechamento = detectar_encoding(caminho_fechamento)
