@@ -140,7 +140,9 @@ def verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
                         '<xJust>NAO APARECE NO SEFAZ....</xJust>',
                         '<xJust>IMPOSTO ERRADO......</xJust>',
                         '<xJust>FORA DE HORARIO....</xJust>',
-                        '<xJust>CARRO QUEBROU.........</xJust>'
+                        '<xJust>CARRO QUEBROU.........</xJust>',
+                        '<xJust>VENDEDORA DIGITOU QNT ERRADA...</xJust>',
+                        '<xJust>CLIENTE EM INVENTARIO</xJust>'
                     ]):
                         return True
                 except Exception:
