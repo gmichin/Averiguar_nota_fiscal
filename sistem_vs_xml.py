@@ -55,18 +55,44 @@ def formatar_data(data_xml):
     except Exception:
         return data_xml
 
-def extrair_numero_nota_do_nome(nome_arquivo):
-    """Extrai o número da nota fiscal do nome do arquivo"""
+def extrair_data_rapido_xml(caminho_arquivo):
+    """Extrai a data de emissão do XML de forma RÁPIDA (apenas leitura parcial)"""
     try:
-        # Remove extensão .xml
-        nome_sem_ext = nome_arquivo.replace('.xml', '').replace('.XML', '')
-        # Extrai apenas números
-        numeros = ''.join(filter(str.isdigit, nome_sem_ext))
-        if numeros:
-            return int(numeros)
-    except:
-        pass
-    return None
+        # Ler apenas os primeiros 5000 bytes onde geralmente está a data
+        with open(caminho_arquivo, 'rb') as f:
+            conteudo_bytes = f.read(5000)
+        
+        # Detectar encoding
+        resultado = chardet.detect(conteudo_bytes)
+        encoding = resultado['encoding']
+        
+        # Converter para string
+        conteudo = conteudo_bytes.decode(encoding, errors='ignore')
+        
+        # Buscar padrão de data no XML (dhEmi)
+        if 'dhEmi' in conteudo:
+            # Encontrar a tag dhEmi
+            start_idx = conteudo.find('<dhEmi>')
+            if start_idx != -1:
+                start_idx += 7  # Tamanho de '<dhEmi>'
+                end_idx = conteudo.find('</dhEmi>', start_idx)
+                if end_idx != -1:
+                    data_str = conteudo[start_idx:end_idx]
+                    
+                    # Limpar timezone
+                    data_str = data_str.split('-03:00')[0] if '-03:00' in data_str else data_str.split('-04:00')[0] if '-04:00' in data_str else data_str
+                    
+                    if 'T' in data_str:
+                        data_dt = datetime.strptime(data_str, '%Y-%m-%dT%H:%M:%S')
+                    else:
+                        data_dt = datetime.strptime(data_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    return data_dt.date()
+        
+        return None
+        
+    except Exception:
+        return None
 
 def verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
     """Verifica se há arquivo na pasta recusado e se contém a mensagem de cancelamento intempestivo"""
@@ -129,19 +155,45 @@ def verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
                         conteudo = f.read()
                     
                     # Verificar se contém a mensagem específica
-                    if any(msg in conteudo for msg in [
-                        '<xJust>NOTA NAO AUTORIZADA</xJust>',
-                        '<xJust>NOTA NAO APARECE NO SEFAZ</xJust>',
-                        '<xServ>INUTILIZAR</xServ>',
-                        '<xJust>ERRO NO SEFAZ................</xJust>',
-                        '<xJust>MERCADO NAO QUIS RECEBER</xJust>',
-                        '<xJust>MERCADORIA FOI DUAS VEZES NO DIA</xJust>',
-                        '<xJust>ERRO NA PESAGEM</xJust>',
-                        '<xJust>NAO APARECE NO SEFAZ....</xJust>',
-                        '<xJust>IMPOSTO ERRADO......</xJust>',
-                        '<xJust>FORA DE HORARIO....</xJust>',
-                        '<xJust>CARRO QUEBROU.........</xJust>'
-                    ]):
+                    if '<xJust>NOTA NAO AUTORIZADA</xJust>' in conteudo:
+                        return True
+                    if '<xJust>NOTA NAO APARECE NO SEFAZ</xJust>' in conteudo:
+                        return True
+                    if '<xServ>INUTILIZAR</xServ>' in conteudo:
+                        return True
+                    if '<xJust>ERRO NO SEFAZ................</xJust>' in conteudo:
+                        return True
+                    if '<xJust>MERCADO NAO QUIS RECEBER</xJust>' in conteudo:
+                        return True
+                    if '<xJust>MERCADORIA FOI DUAS VEZES NO DIA</xJust>' in conteudo:
+                        return True
+                    if '<xJust>ERRO NA PESAGEM</xJust>' in conteudo:
+                        return True
+                    if '<xJust>NAO APARECE NO SEFAZ....</xJust>' in conteudo:
+                        return True
+                    if '<xJust>IMPOSTO ERRADO......</xJust>' in conteudo:
+                        return True
+                    if '<xJust>IMPOSTO ERRADO.....</xJust>' in conteudo:
+                        return True
+                    if '<xJust>IMPOSTO ERRADO............</xJust>' in conteudo:
+                        return True
+                    if '<xJust>IMPOSTO ERRADO.....</xJust>' in conteudo:
+                        return True
+                    if '<xJust>IMPOSTO ERRADO.....</xJust>' in conteudo:
+                        return True
+                    if '<xJust>FORA DE HORARIO....</xJust>' in conteudo:
+                        return True
+                    if '<xJust>NAO APARECEU NO SEFAZ</xJust>' in conteudo:
+                        return True
+                    if '<xJust>ERRO NO SEFAZ..............</xJust>' in conteudo:
+                        return True
+                    if '<xJust>ERRO NO SEFAZ............</xJust>' in conteudo:
+                        return True
+                    if '<xJust>CARRO QUEBROU.........</xJust>' in conteudo:
+                        return True
+                    if '<xJust>CARRO QUEBROU..........</xJust>' in conteudo:
+                        return True
+                    if '<xJust>CARRO QUEBROU...........</xJust>' in conteudo:
                         return True
                 except Exception:
                     continue
@@ -150,84 +202,65 @@ def verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
     
     return False
 
-def extrair_dados_basicos_xml(caminho_completo):
-    """Extrai apenas dados essenciais do XML (muito mais rápido)"""
+def processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado, caminhos_eventos):
+    """Processa um arquivo XML completo e retorna os dados"""
     try:
         encoding = detectar_encoding(caminho_completo)
-        
-        # Ler apenas os primeiros 10KB do arquivo (onde geralmente estão os dados principais)
         with open(caminho_completo, 'r', encoding=encoding) as file:
-            conteudo = file.read(10000)  # Lê apenas os primeiros 10KB
+            conteudo = file.read()
         
-        # Verificar se é nota de venda rapidamente
+        # Verificar se é nota de venda RAPIDAMENTE
         if '<natOp>VENDA</natOp>' not in conteudo:
             return None
         
-        # Extrair dados usando busca em texto (mais rápido que XML parser)
-        def extrair_tag(tag, texto):
-            tag_abertura = f'<{tag}>'
-            tag_fechamento = f'</{tag}>'
-            inicio = texto.find(tag_abertura)
-            if inicio != -1:
-                inicio += len(tag_abertura)
-                fim = texto.find(tag_fechamento, inicio)
-                if fim != -1:
-                    return texto[inicio:fim]
-            return None
+        root = ET.fromstring(conteudo)
         
-        cnf = extrair_tag('cNF', conteudo)
-        nnf = extrair_tag('nNF', conteudo)
-        vnf = extrair_tag('vNF', conteudo)
-        dh_emi = extrair_tag('dhEmi', conteudo)
+        # Remover namespaces
+        for elem in root.iter():
+            if '}' in elem.tag:
+                elem.tag = elem.tag.split('}', 1)[1]
         
-        if cnf and nnf and vnf and dh_emi:
-            return {
-                'Romaneio': int(cnf),
-                'NF-E': int(nnf),
-                'Valor XML': float(vnf),
-                'DATA': dh_emi
-            }
+        # Buscar elementos necessários
+        cnf_element = root.find('.//cNF')
+        nnf_element = root.find('.//nNF')
+        vnf_element = root.find('.//vNF')
+        dh_emi_element = root.find('.//dhEmi')
         
-        return None
-        
-    except Exception:
-        return None
-
-def processar_xml_completo(caminho_completo, dados_basicos, arquivos_can, caminhos_recusado, caminhos_eventos):
-    """Processa um arquivo XML completo e retorna os dados"""
-    try:
-        nfe_num = dados_basicos['NF-E']
-        nfe_str = str(nfe_num).zfill(8)
-        nome_can = f"{nfe_str}.can"
-        
-        # PRIMEIRO: Verificar se a nota foi inutilizada com "NOTA NAO AUTORIZADA"
-        if verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
-            print(f"⚠️ Nota {nfe_num} inutilizada (NÃO AUTORIZADA) - removendo da lista")
-            return None
-        
-        # SEGUNDO: Verificar se existe arquivo .can
-        if nome_can.lower() in arquivos_can:
-            # Verificar se há cancelamento intempestivo
-            if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
+        if all([cnf_element is not None, nnf_element is not None, 
+               vnf_element is not None, dh_emi_element is not None]):
+            
+            nfe_num = int(nnf_element.text) if nnf_element.text else 0
+            nfe_str = str(nfe_num).zfill(8)
+            nome_can = f"{nfe_str}.can"
+            
+            # PRIMEIRO: Verificar se a nota foi inutilizada com "NOTA NAO AUTORIZADA"
+            if verificar_inutilizacao_nota_nao_autorizada(caminhos_eventos, nfe_num):
+                print(f"⚠️ Nota {nfe_num} inutilizada (NÃO AUTORIZADA) - removendo da lista")
+                return None
+            
+            # SEGUNDO: Verificar se existe arquivo .can
+            if nome_can.lower() in arquivos_can:
+                # Verificar se há cancelamento intempestivo
+                if verificar_cancelamento_intempestivo(caminhos_recusado, nfe_str):
+                    return {
+                        'CF': 'VENDA',
+                        'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
+                        'NF-E': nfe_num,
+                        'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
+                        'DATA': formatar_data(dh_emi_element.text),
+                        'OBS': 'Cancelamento Intempestivo'
+                    }
+                else:
+                    return None  # Nota cancelada normalmente
+            else:
+                # Nota não cancelada
                 return {
                     'CF': 'VENDA',
-                    'Romaneio': dados_basicos['Romaneio'],
+                    'Romaneio': int(cnf_element.text) if cnf_element.text else 0,
                     'NF-E': nfe_num,
-                    'Valor XML': dados_basicos['Valor XML'],
-                    'DATA': formatar_data(dados_basicos['DATA']),
-                    'OBS': 'Cancelamento Intempestivo'
+                    'Valor XML': float(vnf_element.text) if vnf_element.text else 0.0,
+                    'DATA': formatar_data(dh_emi_element.text)
                 }
-            else:
-                return None  # Nota cancelada normalmente
-        else:
-            # Nota não cancelada
-            return {
-                'CF': 'VENDA',
-                'Romaneio': dados_basicos['Romaneio'],
-                'NF-E': nfe_num,
-                'Valor XML': dados_basicos['Valor XML'],
-                'DATA': formatar_data(dados_basicos['DATA'])
-            }
     
     except Exception as e:
         print(f"⚠️ Erro ao processar {os.path.basename(caminho_completo)}: {e}")
@@ -235,8 +268,8 @@ def processar_xml_completo(caminho_completo, dados_basicos, arquivos_can, caminh
     return None
 
 def buscar_xml_por_data():
-    """Processa XMLs de notas fiscais por período - VERSÃO ULTRARRÁPIDA"""
-    print("=== PROCESSADOR DE NOTAS FISCAIS (VERSÃO RÁPIDA) ===")
+    """Processa XMLs de notas fiscais por período - VERSÃO OTIMIZADA"""
+    print("=== PROCESSADOR DE NOTAS FISCAIS ===")
     data_inicial_str = input("Digite a data inicial (DD/MM/AAAA): ")
     data_final_str = input("Digite a data final (DD/MM/AAAA): ")
     
@@ -256,8 +289,8 @@ def buscar_xml_por_data():
     caminhos_xml = [
         r"S:\hor\nfe",
         r"S:\hor\nfe2",
-        r"S:\hor\nfe\enviado",
-        r"S:\hor\nfe2\enviado"
+        r"S:\hor\nfe\enviado",  # NOVO
+        r"S:\hor\nfe2\enviado"  # NOVO
     ]
     
     caminhos_eventos = [
@@ -286,10 +319,11 @@ def buscar_xml_por_data():
     total_arquivos = 0
     arquivos_no_periodo = 0
     notas_processadas = 0
+    notas_inutilizadas = 0
     
-    # PRIMEIRA ETAPA: Filtrar arquivos pela data de modificação (MUITO RÁPIDO)
+    # PRIMEIRO: Buscar RAPIDAMENTE arquivos no período
     arquivos_para_processar = []
-    arquivos_unicos = {}
+    arquivos_unicos = set()  # CONJUNTO PARA EVITAR DUPLICATAS
     
     for caminho_xml in diretorios_existentes:
         print(f"🔍 Escaneando {caminho_xml}...")
@@ -301,80 +335,58 @@ def buscar_xml_por_data():
             
             total_arquivos += len(arquivos_lista)
             
-            # Filtrar pela data de modificação do arquivo
+            # Verificar data de cada arquivo (RÁPIDO)
             for entry in arquivos_lista:
-                # Verificar data de modificação do arquivo
-                data_modificacao = datetime.fromtimestamp(entry.stat().st_mtime).date()
+                # VERIFICAR SE JÁ PROCESSAMOS ESTE ARQUIVO (PELO NOME)
+                if entry.name in arquivos_unicos:
+                    continue  # PULAR ARQUIVO DUPLICADO
                 
-                # Se a data de modificação estiver dentro do período
-                if data_inicial <= data_modificacao <= data_final:
-                    # Evitar duplicatas pelo nome do arquivo
-                    if entry.name not in arquivos_unicos:
-                        arquivos_unicos[entry.name] = {
-                            'caminho': entry.path,
-                            'data_mod': data_modificacao
-                        }
-                        arquivos_no_periodo += 1
-                        
+                caminho_completo = os.path.join(caminho_xml, entry.name)
+                data_emissao = extrair_data_rapido_xml(caminho_completo)
+                
+                if data_emissao and data_inicial <= data_emissao <= data_final:
+                    arquivos_para_processar.append(caminho_completo)
+                    arquivos_unicos.add(entry.name)  # ADICIONAR AO CONJUNTO
+                    arquivos_no_periodo += 1
+                    
         except Exception as e:
             print(f"⚠️ Erro em {caminho_xml}: {e}")
     
     print(f"📊 Total de arquivos XML encontrados: {total_arquivos}")
-    print(f"📅 Arquivos únicos no período (pela data modificação): {arquivos_no_periodo}")
+    print(f"📅 Arquivos únicos no período: {arquivos_no_periodo}")
     
     if arquivos_no_periodo == 0:
         print("❌ Nenhum arquivo no período especificado.")
         return None
     
-    # SEGUNDA ETAPA: Processar apenas os arquivos do período (leitura rápida)
-    print("⏳ Extraindo dados dos XMLs...")
-    
-    for i, (nome_arquivo, info) in enumerate(arquivos_unicos.items(), 1):
-        if i % 50 == 0:
+    # SEGUNDO: Processar APENAS os arquivos do período
+    print("⏳ Processando arquivos...")
+
+    for i, caminho_completo in enumerate(arquivos_para_processar, 1):
+        if i % 50 == 0:  # Progresso a cada 50 arquivos
             print(f"📦 Processados {i}/{arquivos_no_periodo} arquivos...")
         
-        # Extrair dados básicos rapidamente
-        dados_basicos = extrair_dados_basicos_xml(info['caminho'])
-        
-        if dados_basicos:
-            # Verificar se a data do XML está dentro do período
-            try:
-                data_xml_str = dados_basicos['DATA']
-                if 'T' in data_xml_str:
-                    data_xml = datetime.strptime(data_xml_str.split('T')[0], '%Y-%m-%d').date()
-                else:
-                    data_xml = datetime.strptime(data_xml_str.split()[0], '%Y-%m-%d').date()
-                
-                if data_inicial <= data_xml <= data_final:
-                    # Processar dados completos
-                    dados = processar_xml_completo(info['caminho'], dados_basicos, arquivos_can, caminhos_recusado, caminhos_eventos)
-                    if dados:
-                        dados_nfe.append(dados)
-                        notas_processadas += 1
-            except:
-                # Se não conseguir extrair data, usa o arquivo mesmo assim
-                dados = processar_xml_completo(info['caminho'], dados_basicos, arquivos_can, caminhos_recusado, caminhos_eventos)
-                if dados:
-                    dados_nfe.append(dados)
-                    notas_processadas += 1
+        dados = processar_xml_completo(caminho_completo, arquivos_can, caminhos_recusado, caminhos_eventos)
+        if dados:
+            dados_nfe.append(dados)
+            notas_processadas += 1
     
     print(f"\n📊 RESUMO FINAL:")
-    print(f"📄 Arquivos no período: {arquivos_no_periodo}")
+    print(f"📄 Arquivos únicos no período: {arquivos_no_periodo}")
     print(f"✅ Notas processadas: {notas_processadas}")
-    if dados_nfe:
-        print(f"💰 Valor total: R$ {sum(d['Valor XML'] for d in dados_nfe):,.2f}")
+    print(f"🚫 Notas inutilizadas (NÃO AUTORIZADA): {notas_inutilizadas}")
+    print(f"💰 Valor total: R$ {sum(d['Valor XML'] for d in dados_nfe):,.2f}")
     
     if dados_nfe:
         df_resultado = pd.DataFrame(dados_nfe)
         df_resultado = df_resultado.sort_values('NF-E')
         return df_resultado
     else:
-        print("⚠️ Nenhuma nota fiscal de VENDA encontrada no período.")
         return None
     
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20260401-20260417.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20260401-20260427.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
     caminho_historico = r"S:\hor\excel\20260401.csv"
     
@@ -494,7 +506,7 @@ def criar_tabela_excel_com_formatacao(df_xml, df_faturamento):
     
     try:
         # ABA 1: NOTAS FISCAIS
-        if df_xml is not None and not df_xml.empty:
+        if df_xml is not None:
             ws_nf = wb.create_sheet("Notas Fiscais")
             
             # Adicionar cabeçalhos
@@ -556,12 +568,12 @@ def criar_tabela_excel_com_formatacao(df_xml, df_faturamento):
                     except:
                         pass
                 adjusted_width = (max_length + 2)
-                ws_nf.column_dimensions[col_letter].width = min(adjusted_width, 50)
+                ws_nf.column_dimensions[col_letter].width = adjusted_width
             
             print(f"✅ Tabela 'Notas Fiscais' criada com {len(df_xml)} registros")
         
         # ABA 2: FATURAMENTO BRUTO
-        if df_faturamento is not None and not df_faturamento.empty:
+        if df_faturamento is not None:
             ws_fat = wb.create_sheet("Faturamento Bruto")
             
             # Adicionar cabeçalhos
@@ -623,7 +635,7 @@ def criar_tabela_excel_com_formatacao(df_xml, df_faturamento):
                     except:
                         pass
                 adjusted_width = (max_length + 2)
-                ws_fat.column_dimensions[col_letter].width = min(adjusted_width, 50)
+                ws_fat.column_dimensions[col_letter].width = adjusted_width
             
             print(f"✅ Tabela 'Faturamento Bruto' criada com {len(df_faturamento)} registros")
         
@@ -638,7 +650,7 @@ def criar_tabela_excel_com_formatacao(df_xml, df_faturamento):
 
 def main():
     """Função principal"""
-    print("=== SISTEMA X XML COM TABELAS E TOTAIS (VERSÃO OTIMIZADA) ===")
+    print("=== SISTEMA X XML COM TABELAS E TOTAIS ===")
     print("1. Processar XMLs de Notas Fiscais")
     print("2. Processar Faturamento Bruto")
     print("3. Processar Ambos")
@@ -661,11 +673,11 @@ def main():
         
         if sucesso:
             # Estatísticas
-            if df_xml is not None and not df_xml.empty:
+            if df_xml is not None:
                 total_valor_xml = df_xml['Valor XML'].sum()
-                print(f"\n📊 Notas Fiscais: {len(df_xml)} registros | Total: R$ {total_valor_xml:,.2f}")
+                print(f"📊 Notas Fiscais: {len(df_xml)} registros | Total: R$ {total_valor_xml:,.2f}")
             
-            if df_faturamento is not None and not df_faturamento.empty:
+            if df_faturamento is not None:
                 total_fat_bruto = df_faturamento['FAT BRUTO'].sum() if 'FAT BRUTO' in df_faturamento.columns else 0
                 print(f"📊 Faturamento Bruto: {len(df_faturamento)} registros | Total: R$ {total_fat_bruto:,.2f}")
             
