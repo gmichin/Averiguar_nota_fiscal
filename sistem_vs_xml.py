@@ -386,9 +386,9 @@ def buscar_xml_por_data():
     
 def processar_faturamento_bruto():
     """Processa arquivos CSV para faturamento bruto"""
-    caminho_fechamento = r"S:\hor\excel\fechamento-20260401-20260427.csv"
+    caminho_fechamento = r"S:\hor\excel\fechamento-20260501-20260513.csv"
     caminho_cancelados = r"S:\hor\arquivos\gustavo\can.csv"
-    caminho_historico = r"S:\hor\excel\20260401.csv"
+    caminho_historico = r"S:\hor\excel\20260501.csv"
     
     try:
         encoding_fechamento = detectar_encoding(caminho_fechamento)
